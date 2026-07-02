@@ -1,0 +1,2 @@
+chess_tracker_project/models/yolo11m_pieces.pt filter=lfs diff=lfs merge=lfs -text
+chess_tracker_project/models/yolo11s_pose_chessboard.pt filter=lfs diff=lfs merge=lfs -text

@@ -198,11 +198,11 @@ st.sidebar.caption("YOLO11 + Stockfish + Interactive Analysis")
 
 with st.sidebar.expander("Model sources", expanded=False):
     pose_model_path = st.text_input(
-        "Board pose model (URL or local path)",
+        "Board pose model (local path)",
         value=DEFAULT_POSE_MODEL_URL,
     )
     piece_model_path = st.text_input(
-        "Piece detection model (URL or local path)",
+        "Piece detection model (local path)",
         value=DEFAULT_PIECE_MODEL_URL,
     )
 
@@ -301,26 +301,24 @@ if uploaded_video is not None and run_button:
         tmp.flush()
         video_path = tmp.name
 
-    # ── Step 1: Load / download models ──────────────────────────────────────
-    model_status = st.status(
-        "⬇️ Loading AI models (first run downloads ~180 MB — please wait)…",
-        expanded=True,
-    )
+    # ── Step 1: Load models from local disk ─────────────────────────────────
+    model_status = st.status("⚙️ Loading AI models…", expanded=False)
     with model_status:
-        st.write("Downloading board-detection model (~59 MB) and piece-detection model (~121 MB) from HuggingFace. "
-                 "This only happens once — they are cached afterwards.")
         try:
             tracker = load_tracker(
                 pose_model_path, piece_model_path,
                 DEFAULT_BOARD_SIZE, pose_conf, piece_conf, stability_seconds,
             )
-            model_status.update(label="✅ Models loaded successfully", state="complete", expanded=False)
+            model_status.update(label="✅ Models loaded", state="complete", expanded=False)
         except Exception as model_err:
             model_status.update(label="❌ Model loading failed", state="error")
             st.error(
                 f"**Could not load YOLO models.**\n\n"
                 f"```\n{model_err}\n```\n\n"
-                "Check your internet connection — the models are downloaded from HuggingFace on first use."
+                f"Expected model files:\n"
+                f"- `{pose_model_path}`\n"
+                f"- `{piece_model_path}`\n\n"
+                "Make sure these files exist in the `models/` directory."
             )
             Path(video_path).unlink(missing_ok=True)
             st.stop()
