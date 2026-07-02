@@ -1,160 +1,90 @@
 """
-Interactive Chess Board Viewer for Streamlit.
+Chess Board Viewer – uses python-chess's built-in SVG renderer for
+a professional Lichess-style board with proper piece graphics.
 
 Provides:
-- Interactive chessboard display
-- Move highlighting and animation
-- FEN visualization
-- PV (Principal Variation) display
+- board_to_svg()       — single-position SVG (Lichess-style)
+- board_to_text()      — ASCII fallback
+- get_html_viewer()    — standalone HTML page with move list
+- wrap_svg()           — convenience wrapper for Streamlit st.components.v1.html
 """
 from __future__ import annotations
 
 import chess
+import chess.svg
+
+
+# ── Colour themes ──────────────────────────────────────────────────────────
+THEMES = {
+    "lichess": {
+        "square light":           "#f0d9b5",
+        "square dark":            "#b58863",
+        "square light lastmove":  "#cdd16e",
+        "square dark lastmove":   "#aaa23a",
+    },
+    "chess.com": {
+        "square light":           "#eeeed2",
+        "square dark":            "#769656",
+        "square light lastmove":  "#f6f669",
+        "square dark lastmove":   "#baca44",
+    },
+    "blue": {
+        "square light":           "#dee3e6",
+        "square dark":            "#8ca2ad",
+        "square light lastmove":  "#c4d4da",
+        "square dark lastmove":   "#6f8fa0",
+    },
+}
+
+DEFAULT_THEME = "lichess"
 
 
 class BoardViewer:
     """
-    Generates HTML/SVG representation of a chess position for
-    interactive display in Streamlit.
+    Wraps chess.svg to render professional, Lichess-style chess boards
+    for display in Streamlit via st.components.v1.html().
     """
 
-    PIECE_UNICODE = {
-        "K": "♔",
-        "Q": "♕",
-        "R": "♖",
-        "B": "♗",
-        "N": "♘",
-        "P": "♙",
-        "k": "♚",
-        "q": "♛",
-        "r": "♜",
-        "b": "♝",
-        "n": "♞",
-        "p": "♟",
-    }
-
-    COLORS = {
-        "light": "#f0d9b5",
-        "dark": "#baca44",
-        "highlight_move": "#baca44",
-        "highlight_square": "#f6d66f",
-        "text_light": "#111111",
-        "text_dark": "#f0d9b5",
-    }
-
-    SQUARE_SIZE = 60  # pixels
-
     @staticmethod
-    def get_square_color(square: int) -> str:
-        """Get the color of a square."""
-        file = chess.square_file(square)
-        rank = chess.square_rank(square)
-        if (file + rank) % 2 == 0:
-            return BoardViewer.COLORS["light"]
-        else:
-            return BoardViewer.COLORS["dark"]
-
-    @staticmethod
-    def get_text_color(square: int) -> str:
-        """Get the text color for a square."""
-        file = chess.square_file(square)
-        rank = chess.square_rank(square)
-        if (file + rank) % 2 == 0:
-            return BoardViewer.COLORS["text_light"]
-        else:
-            return BoardViewer.COLORS["text_dark"]
-
-    @classmethod
     def board_to_svg(
-        cls,
         board: chess.Board,
-        last_move: chess.Move = None,
+        last_move: chess.Move | None = None,
         orientation: str = "white",
+        size: int = 400,
+        theme: str = DEFAULT_THEME,
+        arrows: list | None = None,
     ) -> str:
         """
-        Convert a board to an interactive SVG.
+        Render the board as an SVG string using python-chess's built-in renderer.
+
         Args:
-            board: chess.Board object
-            last_move: Optional last move to highlight
-            orientation: 'white' or 'black' for board flip
+            board:       chess.Board to render.
+            last_move:   Move to highlight (from/to squares highlighted).
+            orientation: 'white' or 'black' – which side faces the viewer.
+            size:        Pixel size of the square board (default 400).
+            theme:       One of 'lichess', 'chess.com', 'blue'.
+            arrows:      Optional list of chess.svg.Arrow objects.
+
         Returns:
-            SVG string
+            SVG string ready to embed in HTML.
         """
-        size = cls.SQUARE_SIZE * 8
-        margin = 30
-        width = size + 2 * margin
-        height = size + 2 * margin
-        svg_parts = [
-            f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">',
-            f'<rect x="0" y="0" width="{width}" height="{height}" fill="#eef2f7"/>',
-            f'<rect x="{margin - 8}" y="{margin - 8}" width="{size + 16}" height="{size + 16}" rx="28" fill="#2f3746"/>',
-            f'<rect x="{margin}" y="{margin}" width="{size}" height="{size}" rx="18" fill="#f7f4ec" stroke="#2f3746" stroke-width="2"/>',
-        ]
+        colors = THEMES.get(theme, THEMES[DEFAULT_THEME])
+        orient = chess.WHITE if orientation == "white" else chess.BLACK
 
-        # Determine board orientation
-        flip = orientation == "black"
+        svg = chess.svg.board(
+            board,
+            orientation=orient,
+            lastmove=last_move,
+            size=size,
+            colors=colors,
+            arrows=arrows or [],
+            coordinates=True,
+        )
+        return svg
 
-        # Draw squares and pieces
-        for rank in range(8):
-            for file in range(8):
-                if flip:
-                    x = margin + (7 - file) * cls.SQUARE_SIZE
-                    y = margin + rank * cls.SQUARE_SIZE
-                    square = chess.square(7 - file, 7 - rank)
-                else:
-                    x = margin + file * cls.SQUARE_SIZE
-                    y = margin + (7 - rank) * cls.SQUARE_SIZE
-                    square = chess.square(file, rank)
-
-                color = cls.get_square_color(square)
-
-                # Highlight last move
-                if last_move and square in (last_move.from_square, last_move.to_square):
-                    color = cls.COLORS["highlight_square"]
-
-                # Draw square
-                svg_parts.append(
-                    f'<rect x="{x}" y="{y}" width="{cls.SQUARE_SIZE}" '
-                    f'height="{cls.SQUARE_SIZE}" fill="{color}"/>'
-                )
-
-                # Draw piece
-                piece = board.piece_at(square)
-                if piece:
-                    text_color = cls.get_text_color(square)
-                    piece_char = cls.PIECE_UNICODE[piece.symbol()]
-                    cx = x + cls.SQUARE_SIZE / 2
-                    cy = y + cls.SQUARE_SIZE / 2
-
-                    svg_parts.append(
-                        f'<text x="{cx}" y="{cy}" font-size="48" font-weight="bold" '
-                        f'fill="{text_color}" text-anchor="middle" dominant-baseline="central">'
-                        f"{piece_char}</text>"
-                    )
-
-                # Draw coordinates
-                if file == 0:
-                    rank_label = 8 - rank if not flip else rank + 1
-                    svg_parts.append(
-                        f'<text x="{x - 6}" y="{y + cls.SQUARE_SIZE / 2 + 5}" font-size="12" '
-                        f'fill="#2f2f2f" text-anchor="end">{rank_label}</text>'
-                    )
-                if rank == 7:
-                    file_label = chr(ord("a") + file if not flip else ord("h") - file)
-                    svg_parts.append(
-                        f'<text x="{x + cls.SQUARE_SIZE / 2}" y="{y + cls.SQUARE_SIZE + 18}" '
-                        f'font-size="12" fill="#2f2f2f" text-anchor="middle">{file_label}</text>'
-                    )
-        svg_parts.append("</svg>")
-        return "\n".join(svg_parts)
-
-    @classmethod
-    def board_to_text(cls, board: chess.Board) -> str:
-        """
-        Convert a board to ASCII representation.
-        Returns:
-            ASCII board string
-        """
+    @staticmethod
+    def board_to_text(board: chess.Board) -> str:
+        """Return a plain ASCII representation of the board."""
         lines = ["  a b c d e f g h"]
         for rank in range(8, 0, -1):
             row = f"{rank} "
@@ -168,63 +98,162 @@ class BoardViewer:
         return "\n".join(lines)
 
     @staticmethod
-    def get_html_viewer(
-        board: chess.Board,
-        move_history: list,
-        last_move: chess.Move = None,
-        title: str = "Chessboard",
+    def wrap_svg(
+        svg: str,
+        width: int = 420,
+        height: int = 440,
+        bg: str = "#f8fafc",
     ) -> str:
         """
-        Generate a complete HTML page for board viewing with move history.
-        """
-        board_svg = BoardViewer.board_to_svg(board, last_move)
+        Wrap an SVG string in a minimal HTML page suitable for
+        st.components.v1.html().
 
-        move_list = ""
-        for i, move_san in enumerate(move_history):
-            if i % 2 == 0:
-                move_list += f"<div class='move-pair'>"
-            move_list += f"<span class='move'>{i + 1}.{move_san if i % 2 == 0 else ''} {move_san if i % 2 == 1 else ''}</span>"
-            if i % 2 == 1:
-                move_list += "</div>"
-
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{ font-family: 'Inter', Arial, sans-serif; background: #f4f6fb; color: #1f2937; margin: 0; }}
-                .wrapper {{ max-width: 1200px; margin: 0 auto; padding: 18px; }}
-                .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }}
-                .header h2 {{ margin: 0; font-size: 20px; color: #111827; }}
-                .container {{ display: flex; gap: 24px; flex-wrap: wrap; }}
-                .board {{ flex: 0 0 auto; }}
-                .info {{ flex: 1; min-width: 300px; }}
-                .move-list {{ background: #ffffff; padding: 16px; border-radius: 16px; box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08); max-height: 520px; overflow-y: auto; }}
-                .move-pair {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 8px; }}
-                .move {{ padding: 8px 10px; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 12px; color: #111827; font-size: 14px; }}
-                .fen-card {{ background: #ffffff; padding: 16px; border-radius: 16px; border: 1px solid #e5e7eb; margin-top: 16px; }}
-                .fen {{ font-family: monospace; font-size: 13px; color: #111827; word-break: break-all; }}
-            </style>
-        </head>
-        <body>
-            <div class="wrapper">
-                <div class="header">
-                    <h2>{title}</h2>
-                    <span style="color:#6b7280;font-size:14px">{board.turn and 'White to move' or 'Black to move'}</span>
-                </div>
-                <div class="container">
-                    <div class="board">{board_svg}</div>
-                    <div class="info">
-                        <h3>Move History</h3>
-                        <div class="move-list">{move_list or '<em>No moves available</em>'}</div>
-                        <div class="fen-card">
-                            <h3 style="margin-top:0;">FEN</h3>
-                            <div class="fen">{board.fen()}</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>
+        Args:
+            svg:    The SVG string from board_to_svg().
+            width:  iframe width in pixels.
+            height: iframe height in pixels.
+            bg:     Page background colour (should match app theme).
         """
+        return (
+            f"<!DOCTYPE html><html><head>"
+            f"<style>body{{margin:0;background:{bg};"
+            f"display:flex;justify-content:center;align-items:center;height:100vh;}}</style>"
+            f"</head><body>{svg}</body></html>"
+        )
+
+    @classmethod
+    def get_html_viewer(
+        cls,
+        board: chess.Board,
+        move_history: list[str],
+        last_move: chess.Move | None = None,
+        title: str = "Chessboard",
+        orientation: str = "white",
+        theme: str = DEFAULT_THEME,
+    ) -> str:
+        """
+        Generate a complete, self-contained HTML page showing the board
+        on the left and the move list on the right.
+
+        Args:
+            board:        Current chess.Board.
+            move_history: List of SAN move strings (displayed as a move list).
+            last_move:    Move to highlight.
+            title:        Page / section title.
+            orientation:  'white' or 'black'.
+            theme:        Board colour theme.
+
+        Returns:
+            Full HTML string for st.components.v1.html().
+        """
+        board_svg = cls.board_to_svg(board, last_move, orientation=orientation,
+                                     size=380, theme=theme)
+
+        # Build move list HTML
+        move_rows = ""
+        for i in range(0, len(move_history), 2):
+            move_num = i // 2 + 1
+            white_san = move_history[i] if i < len(move_history) else ""
+            black_san = move_history[i + 1] if i + 1 < len(move_history) else ""
+            move_rows += (
+                f"<tr>"
+                f"<td class='num'>{move_num}.</td>"
+                f"<td class='mv'>{white_san}</td>"
+                f"<td class='mv'>{black_san}</td>"
+                f"</tr>"
+            )
+
+        turn_label = "White to move" if board.turn == chess.WHITE else "Black to move"
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f8fafc;
+    color: #1e293b;
+    padding: 12px;
+  }}
+  .layout {{
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }}
+  .board-wrap {{ flex: 0 0 auto; }}
+  .board-title {{
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 6px;
+  }}
+  .turn-badge {{
+    display: inline-block;
+    margin-top: 8px;
+    padding: 3px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #e2e8f0;
+    color: #334155;
+  }}
+  .panel {{
+    flex: 1;
+    min-width: 180px;
+  }}
+  .panel h3 {{
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: #64748b;
+    margin-bottom: 8px;
+  }}
+  .movelist {{
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    max-height: 380px;
+    overflow-y: auto;
+    padding: 4px 0;
+  }}
+  .movelist table {{ width: 100%; border-collapse: collapse; }}
+  .movelist td {{ padding: 5px 10px; font-size: 13px; }}
+  .movelist tr:nth-child(even) {{ background: #f8fafc; }}
+  .movelist td.num {{ color: #94a3b8; width: 36px; font-weight: 600; }}
+  .movelist td.mv  {{ font-weight: 500; color: #1e293b; }}
+  .fen-box {{
+    margin-top: 12px;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 10px 12px;
+  }}
+  .fen-box h3 {{ font-size: 11px; text-transform: uppercase; letter-spacing:.05em; color:#64748b; margin-bottom:4px; }}
+  .fen-val {{ font-family: monospace; font-size: 11px; color: #1e293b; word-break: break-all; }}
+</style>
+</head>
+<body>
+  <div class="layout">
+    <div class="board-wrap">
+      <div class="board-title">{title}</div>
+      {board_svg}
+      <div class="turn-badge">{turn_label}</div>
+    </div>
+    <div class="panel">
+      <h3>Move History</h3>
+      <div class="movelist">
+        <table>{move_rows or '<tr><td colspan="3" style="color:#94a3b8;padding:12px;">No moves yet</td></tr>'}</table>
+      </div>
+      <div class="fen-box">
+        <h3>FEN</h3>
+        <div class="fen-val">{board.fen()}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
         return html

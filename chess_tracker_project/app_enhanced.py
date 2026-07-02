@@ -230,6 +230,12 @@ with st.sidebar.expander("Analysis settings", expanded=False):
         help="Higher = slower but more accurate. Depth 10–15 is fast for most games.",
     )
     board_orientation = st.radio("Board orientation", ["White", "Black"], index=0)
+    board_theme = st.selectbox(
+        "Board colour theme",
+        ["lichess", "chess.com", "blue"],
+        index=0,
+        help="Lichess = brown/cream  |  Chess.com = green/ivory  |  Blue = steel blue",
+    )
     show_ascii_board = st.checkbox("Also show ASCII board", value=False)
 
 st.sidebar.divider()
@@ -301,15 +307,33 @@ if uploaded_video is not None and run_button:
     )
 
     progress_bar = st.progress(0.0, text="Starting…")
-    col_preview, col_moves = st.columns([2, 1])
+
+    # Three-column live layout: camera feed | live chess board | move list
+    col_preview, col_live_board, col_moves = st.columns([5, 4, 3])
     with col_preview:
+        st.caption("📹 Camera detection")
         preview_slot = st.empty()
+    with col_live_board:
+        st.caption("♟️ Live board")
+        live_board_slot = st.empty()
+        live_move_label_slot = st.empty()
     with col_moves:
-        st.subheader("Moves (live)")
+        st.caption("📋 Moves (live)")
         moves_slot = st.empty()
 
     live_moves: list[MoveRecord] = []
-    ui_state = {"last_update": 0.0}
+    live_board_state = {"board": chess.Board(), "last_move": None}
+    ui_state = {"last_update": 0.0, "board_update": 0.0}
+
+    # Render the starting position immediately so the board is visible from the start
+    _start_svg = BoardViewer.board_to_svg(
+        live_board_state["board"], None,
+        orientation=board_orientation.lower(), size=340, theme=board_theme,
+    )
+    with live_board_slot:
+        st.components.v1.html(
+            BoardViewer.wrap_svg(_start_svg, width=360, height=360, bg="#f8fafc"), height=360,
+        )
 
     def on_progress(frame_idx, total_frames):
         if total_frames > 0:
@@ -329,12 +353,48 @@ if uploaded_video is not None and run_button:
 
     def on_move(record: MoveRecord):
         live_moves.append(record)
+
+        # Update live chess board
+        try:
+            uci = f"{record.from_square}{record.to_square}"
+            m = chess.Move.from_uci(uci)
+            b = live_board_state["board"]
+            if m in b.legal_moves:
+                b.push(m)
+                live_board_state["last_move"] = m
+
+                now = time.time()
+                # Throttle board renders to at most ~4 fps to keep UI responsive
+                if now - ui_state["board_update"] >= 0.25:
+                    ui_state["board_update"] = now
+                    svg = BoardViewer.board_to_svg(
+                        b, m,
+                        orientation=board_orientation.lower(),
+                        size=340,
+                        theme=board_theme,
+                    )
+                    with live_board_slot:
+                        st.components.v1.html(
+                            BoardViewer.wrap_svg(svg, width=360, height=360, bg="#f8fafc"),
+                            height=360,
+                        )
+                    move_num = (record.ply + 1) // 2
+                    color_str = "White" if record.color == "w" else "Black"
+                    live_move_label_slot.markdown(
+                        f"<div style='text-align:center;font-size:13px;color:#475569;margin-top:4px'>"
+                        f"Move {move_num} — {color_str}: <strong>{record.san}</strong></div>",
+                        unsafe_allow_html=True,
+                    )
+        except Exception:
+            pass
+
+        # Update moves table
         df = pd.DataFrame([
-            {"#": m.ply, "Color": "White" if m.color == "w" else "Black",
-             "Move": m.san, "FEN": m.fen}
+            {"#": m.ply, "Color": "⬜" if m.color == "w" else "⬛",
+             "Move": m.san}
             for m in live_moves
         ])
-        moves_slot.dataframe(df, use_container_width=True, hide_index=True, height=420)
+        moves_slot.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
     try:
         with st.spinner("Processing video…"):
@@ -524,10 +584,15 @@ with tab_board:
                 unsafe_allow_html=True,
             )
 
-            svg = BoardViewer.board_to_svg(curr_board, curr_move, orientation=orientation)
+            svg = BoardViewer.board_to_svg(
+                curr_board, curr_move,
+                orientation=orientation,
+                size=420,
+                theme=board_theme,
+            )
             st.components.v1.html(
-                f'<div style="display:flex;justify-content:center;">{svg}</div>',
-                height=560,
+                BoardViewer.wrap_svg(svg, width=460, height=460, bg="#f8fafc"),
+                height=460,
             )
 
             if show_ascii_board:
