@@ -301,11 +301,31 @@ if uploaded_video is not None and run_button:
         tmp.flush()
         video_path = tmp.name
 
-    tracker = load_tracker(
-        pose_model_path, piece_model_path,
-        DEFAULT_BOARD_SIZE, pose_conf, piece_conf, stability_seconds,
+    # ── Step 1: Load / download models ──────────────────────────────────────
+    model_status = st.status(
+        "⬇️ Loading AI models (first run downloads ~180 MB — please wait)…",
+        expanded=True,
     )
+    with model_status:
+        st.write("Downloading board-detection model (~59 MB) and piece-detection model (~121 MB) from HuggingFace. "
+                 "This only happens once — they are cached afterwards.")
+        try:
+            tracker = load_tracker(
+                pose_model_path, piece_model_path,
+                DEFAULT_BOARD_SIZE, pose_conf, piece_conf, stability_seconds,
+            )
+            model_status.update(label="✅ Models loaded successfully", state="complete", expanded=False)
+        except Exception as model_err:
+            model_status.update(label="❌ Model loading failed", state="error")
+            st.error(
+                f"**Could not load YOLO models.**\n\n"
+                f"```\n{model_err}\n```\n\n"
+                "Check your internet connection — the models are downloaded from HuggingFace on first use."
+            )
+            Path(video_path).unlink(missing_ok=True)
+            st.stop()
 
+    # ── Step 2: Live processing UI ───────────────────────────────────────────
     progress_bar = st.progress(0.0, text="Starting…")
 
     # Three-column live layout: camera feed | live chess board | move list
@@ -325,15 +345,25 @@ if uploaded_video is not None and run_button:
     live_board_state = {"board": chess.Board(), "last_move": None}
     ui_state = {"last_update": 0.0, "board_update": 0.0}
 
-    # Render the starting position immediately so the board is visible from the start
-    _start_svg = BoardViewer.board_to_svg(
-        live_board_state["board"], None,
-        orientation=board_orientation.lower(), size=340, theme=board_theme,
-    )
-    with live_board_slot:
-        st.components.v1.html(
-            BoardViewer.wrap_svg(_start_svg, width=360, height=360, bg="#f8fafc"), height=360,
+    def _render_live_board(board: chess.Board, last_move, label: str = ""):
+        """Render board as inline SVG into the live_board_slot via markdown."""
+        svg = BoardViewer.board_to_svg(
+            board, last_move,
+            orientation=board_orientation.lower(),
+            size=320,
+            theme=board_theme,
         )
+        # Inline SVG in a centred div — works reliably in Streamlit callbacks
+        live_board_slot.markdown(
+            f'<div style="display:flex;flex-direction:column;align-items:center;">'
+            f'{svg}'
+            f'<div style="font-size:12px;color:#64748b;margin-top:6px;">{label}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Show starting position immediately
+    _render_live_board(live_board_state["board"], None, "Starting position")
 
     def on_progress(frame_idx, total_frames):
         if total_frames > 0:
@@ -349,12 +379,14 @@ if uploaded_video is not None and run_button:
             return
         ui_state["last_update"] = time.time()
         rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
-        preview_slot.image(rgb, caption=f"Frame {frame_idx}/{total_frames}", use_container_width=True)
+        preview_slot.image(
+            rgb, caption=f"Frame {frame_idx}/{total_frames}", use_container_width=True
+        )
 
     def on_move(record: MoveRecord):
         live_moves.append(record)
 
-        # Update live chess board
+        # Update live chess board position
         try:
             uci = f"{record.from_square}{record.to_square}"
             m = chess.Move.from_uci(uci)
@@ -364,40 +396,26 @@ if uploaded_video is not None and run_button:
                 live_board_state["last_move"] = m
 
                 now = time.time()
-                # Throttle board renders to at most ~4 fps to keep UI responsive
+                # Throttle renders to ~4 fps — keeps UI responsive
                 if now - ui_state["board_update"] >= 0.25:
                     ui_state["board_update"] = now
-                    svg = BoardViewer.board_to_svg(
-                        b, m,
-                        orientation=board_orientation.lower(),
-                        size=340,
-                        theme=board_theme,
-                    )
-                    with live_board_slot:
-                        st.components.v1.html(
-                            BoardViewer.wrap_svg(svg, width=360, height=360, bg="#f8fafc"),
-                            height=360,
-                        )
                     move_num = (record.ply + 1) // 2
                     color_str = "White" if record.color == "w" else "Black"
-                    live_move_label_slot.markdown(
-                        f"<div style='text-align:center;font-size:13px;color:#475569;margin-top:4px'>"
-                        f"Move {move_num} — {color_str}: <strong>{record.san}</strong></div>",
-                        unsafe_allow_html=True,
-                    )
+                    label = f"Move {move_num} — {color_str}: {record.san}"
+                    _render_live_board(b, m, label)
         except Exception:
             pass
 
         # Update moves table
         df = pd.DataFrame([
-            {"#": m.ply, "Color": "⬜" if m.color == "w" else "⬛",
-             "Move": m.san}
-            for m in live_moves
+            {"#": mv.ply, "Color": "⬜" if mv.color == "w" else "⬛", "Move": mv.san}
+            for mv in live_moves
         ])
         moves_slot.dataframe(df, use_container_width=True, hide_index=True, height=400)
 
+    # ── Step 3: Run tracking ─────────────────────────────────────────────────
     try:
-        with st.spinner("Processing video…"):
+        with st.spinner("🎥 Analysing video…"):
             result = tracker.process_video(
                 video_path,
                 progress_callback=on_progress,
@@ -405,13 +423,22 @@ if uploaded_video is not None and run_button:
                 move_callback=on_move,
                 frame_stride=frame_stride,
             )
+    except Exception as proc_err:
+        st.error(
+            f"**Video processing failed.**\n\n"
+            f"```\n{proc_err}\n```\n\n"
+            "Make sure the video shows a clearly lit, unobstructed chess board from above. "
+            "Try increasing the frame stride or lowering the confidence thresholds in Detection settings."
+        )
+        Path(video_path).unlink(missing_ok=True)
+        st.stop()
     finally:
         try:
             Path(video_path).unlink(missing_ok=True)
-        except PermissionError:
+        except (PermissionError, FileNotFoundError):
             pass
 
-    progress_bar.progress(1.0, text="Done!")
+    progress_bar.progress(1.0, text="✅ Done!")
     st.session_state.result = result
 
     # --- Build game object ---
